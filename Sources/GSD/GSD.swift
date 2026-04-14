@@ -1005,6 +1005,7 @@ class MarkdownStyler: NSObject, NSTextStorageDelegate {
         let string = storage.string as NSString
         let line = string.substring(with: range)
         let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let indentLevel = Self.indentLevel(of: line)
 
         // Headers
         if trimmed.hasPrefix("### ") {
@@ -1036,6 +1037,7 @@ class MarkdownStyler: NSObject, NSTextStorageDelegate {
                     .strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: textRange)
                 storage.addAttribute(.strikethroughColor, value: Self.checkedColor, range: textRange)
             }
+            applyIndentParagraph(storage, range: range, level: indentLevel)
         }
         // Checked checkbox
         else if trimmed.hasPrefix("- [x] ") || trimmed.hasPrefix("- [X] ") {
@@ -1056,31 +1058,31 @@ class MarkdownStyler: NSObject, NSTextStorageDelegate {
                     .strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: textRange)
                 storage.addAttribute(.strikethroughColor, value: Self.checkedColor, range: textRange)
             }
+            applyIndentParagraph(storage, range: range, level: indentLevel)
         }
         // Unchecked checkbox
-        else if trimmed.hasPrefix("- [ ] ") {
-            if let pr = markerRange(in: line, prefix: "- [ ] ", baseLocation: range.location) {
+        else if trimmed.hasPrefix("- [ ] ") || trimmed == "- [ ]" {
+            if let pr = markerRange(in: line, prefix: "- [ ] ", baseLocation: range.location) ??
+                markerRange(in: line, prefix: "- [ ]", baseLocation: range.location) {
                 storage.addAttribute(.foregroundColor, value: NSColor.systemOrange, range: pr)
                 storage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 15, weight: .medium), range: pr)
                 storage.addAttribute(.cursor, value: NSCursor.pointingHand, range: pr)
             }
+            applyIndentParagraph(storage, range: range, level: indentLevel)
         }
-        // Indented note lines (4 spaces + ◦ bullet)
-        else if trimmed.hasPrefix("◦ ") {
-            if let pr = markerRange(in: line, prefix: "◦ ", baseLocation: range.location) {
-                storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: pr)
-                storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 11, weight: .regular), range: pr)
-            }
+        // Note bullet (◦)
+        else if trimmed.hasPrefix("◦ ") || trimmed == "◦" {
             let notePara = NSMutableParagraphStyle()
             notePara.lineSpacing = 3
             notePara.paragraphSpacing = 1
-            notePara.headIndent = 32
-            notePara.firstLineHeadIndent = 20
+            let baseIndent: CGFloat = CGFloat(indentLevel) * 20.0 + 20.0
+            notePara.firstLineHeadIndent = baseIndent
+            notePara.headIndent = baseIndent + 12
             storage.addAttribute(.paragraphStyle, value: notePara, range: range)
             storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: range)
             storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 13, weight: .regular), range: range)
-            // Re-apply the bullet marker styling on top
-            if let pr = markerRange(in: line, prefix: "◦ ", baseLocation: range.location) {
+            if let pr = markerRange(in: line, prefix: "◦", baseLocation: range.location) {
+                storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: pr)
                 storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 11, weight: .regular), range: pr)
             }
         }
@@ -1091,7 +1093,27 @@ class MarkdownStyler: NSObject, NSTextStorageDelegate {
             {
                 storage.addAttribute(.foregroundColor, value: Self.markerColor, range: pr)
             }
+            if indentLevel > 0 {
+                applyIndentParagraph(storage, range: range, level: indentLevel)
+            }
         }
+    }
+
+    /// Returns indent level (0-3) based on leading spaces (2 spaces per level).
+    static func indentLevel(of line: String) -> Int {
+        let spaces = line.prefix(while: { $0 == " " }).count
+        return min(spaces / 2, 3)
+    }
+
+    private func applyIndentParagraph(_ storage: NSTextStorage, range: NSRange, level: Int) {
+        guard level > 0 else { return }
+        let para = NSMutableParagraphStyle()
+        para.lineSpacing = 5
+        para.paragraphSpacing = 2
+        let indent: CGFloat = CGFloat(level) * 20.0
+        para.firstLineHeadIndent = indent
+        para.headIndent = indent + 20
+        storage.addAttribute(.paragraphStyle, value: para, range: range)
     }
 
     private func applyHeader(
@@ -1183,7 +1205,8 @@ class MarkdownNSTextView: NSTextView {
                 || trimmed.hasPrefix("- [X]")
             {
                 let offsetInLine = index - lineRange.location
-                if offsetInLine < 6 {
+                let leadingSpaces = line.prefix(while: { $0 == " " }).count
+                if offsetInLine < leadingSpaces + 6 {
                     onCheckboxToggle?(lineRange)
                     return
                 }
@@ -1312,6 +1335,147 @@ class MarkdownNSTextView: NSTextView {
         return true
     }
 
+    // MARK: Backspace – delete empty prefix in one press
+
+    override func deleteBackward(_ sender: Any?) {
+        let ns = self.string as NSString
+        let cursor = selectedRange().location
+        guard cursor > 0, cursor <= ns.length, selectedRange().length == 0 else {
+            super.deleteBackward(sender)
+            return
+        }
+
+        // Get the line the cursor is actually on
+        let cursorLineRange = ns.lineRange(for: NSRange(location: min(cursor, max(ns.length - 1, 0)), length: 0))
+        let cursorLine = ns.substring(with: cursorLineRange).trimmingCharacters(in: .newlines)
+        let cursorTrimmed = cursorLine.trimmingCharacters(in: .whitespaces)
+        let cursorInLine = cursor - cursorLineRange.location
+        let indent = cursorLine.prefix(while: { $0 == " " })
+
+        // Empty checkbox — delete the whole line (prefix + preceding newline)
+        if cursorTrimmed == "- [ ]" || cursorTrimmed == "- [ ] " {
+            deleteWholeLine(lineRange: cursorLineRange, lineContent: cursorLine)
+            return
+        }
+
+        // Empty note bullet — delete the whole line
+        if cursorTrimmed == "◦" || cursorTrimmed == "◦ " {
+            deleteWholeLine(lineRange: cursorLineRange, lineContent: cursorLine)
+            return
+        }
+
+        // Empty bullet — delete the whole line
+        if cursorTrimmed == "-" || cursorTrimmed == "- " || cursorTrimmed == "*" || cursorTrimmed == "* " {
+            deleteWholeLine(lineRange: cursorLineRange, lineContent: cursorLine)
+            return
+        }
+
+        // Cursor at start of text after indent — delete one indent level
+        let textAfterIndent = String(cursorLine.dropFirst(indent.count))
+        if !indent.isEmpty && cursorInLine == indent.count
+            && (textAfterIndent.hasPrefix("- [ ]") || textAfterIndent.hasPrefix("◦")
+                || textAfterIndent.hasPrefix("- ") || textAfterIndent.hasPrefix("* "))
+        {
+            let removeCount = min(2, indent.count)
+            let deleteRange = NSRange(location: cursorLineRange.location, length: removeCount)
+            if shouldChangeText(in: deleteRange, replacementString: "") {
+                replaceCharacters(in: deleteRange, with: "")
+                didChangeText()
+            }
+            return
+        }
+
+        super.deleteBackward(sender)
+    }
+
+    /// Deletes an entire line including the preceding newline, moving cursor to end of previous line.
+    private func deleteWholeLine(lineRange: NSRange, lineContent: String) {
+        let ns = self.string as NSString
+        let contentLen = (lineContent as NSString).length
+
+        // Include the preceding newline if this isn't the first line
+        if lineRange.location > 0 {
+            let deleteStart = lineRange.location - 1  // the \n before this line
+            let deleteLen = contentLen + 1
+            let deleteRange = NSRange(location: deleteStart, length: deleteLen)
+            if shouldChangeText(in: deleteRange, replacementString: "") {
+                replaceCharacters(in: deleteRange, with: "")
+                didChangeText()
+            }
+        } else {
+            // First line — just delete the content (and trailing newline if present)
+            let deleteLen = min(contentLen + 1, ns.length)  // +1 for trailing \n
+            let deleteRange = NSRange(location: 0, length: deleteLen)
+            if shouldChangeText(in: deleteRange, replacementString: "") {
+                replaceCharacters(in: deleteRange, with: "")
+                didChangeText()
+            }
+        }
+    }
+
+    // MARK: Tab / Shift+Tab – indent / outdent (up to 3 levels)
+
+    override func insertTab(_ sender: Any?) {
+        let ns = self.string as NSString
+        let cursor = selectedRange().location
+        guard cursor <= ns.length else {
+            super.insertTab(sender)
+            return
+        }
+
+        let lineRange = ns.lineRange(for: NSRange(location: min(cursor, max(ns.length - 1, 0)), length: 0))
+        let line = ns.substring(with: lineRange).trimmingCharacters(in: .newlines)
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let indentLevel = MarkdownStyler.indentLevel(of: line)
+
+        // Only indent task/note/bullet lines, max 3 levels
+        if (trimmed.hasPrefix("- [ ]") || trimmed.hasPrefix("- [x]") || trimmed.hasPrefix("- [X]")
+            || trimmed.hasPrefix("- [-]") || trimmed.hasPrefix("◦") || trimmed.hasPrefix("- ")
+            || trimmed.hasPrefix("* ")) && indentLevel < 3
+        {
+            let insertRange = NSRange(location: lineRange.location, length: 0)
+            if shouldChangeText(in: insertRange, replacementString: "  ") {
+                replaceCharacters(in: insertRange, with: "  ")
+                didChangeText()
+            }
+            return
+        }
+
+        super.insertTab(sender)
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+        let ns = self.string as NSString
+        let cursor = selectedRange().location
+        guard cursor <= ns.length else {
+            super.insertBacktab(sender)
+            return
+        }
+
+        let lineRange = ns.lineRange(for: NSRange(location: min(cursor, max(ns.length - 1, 0)), length: 0))
+        let line = ns.substring(with: lineRange).trimmingCharacters(in: .newlines)
+        let indent = line.prefix(while: { $0 == " " })
+
+        // Remove up to 2 spaces of indent
+        if indent.count >= 2 {
+            let deleteRange = NSRange(location: lineRange.location, length: 2)
+            if shouldChangeText(in: deleteRange, replacementString: "") {
+                replaceCharacters(in: deleteRange, with: "")
+                didChangeText()
+            }
+            return
+        } else if indent.count == 1 {
+            let deleteRange = NSRange(location: lineRange.location, length: 1)
+            if shouldChangeText(in: deleteRange, replacementString: "") {
+                replaceCharacters(in: deleteRange, with: "")
+                didChangeText()
+            }
+            return
+        }
+
+        super.insertBacktab(sender)
+    }
+
     // MARK: Enter – continue checkboxes / bullets; Shift+Enter for notes
 
     override func insertNewline(_ sender: Any?) {
@@ -1326,34 +1490,22 @@ class MarkdownNSTextView: NSTextView {
         let line = ns.substring(with: lineRange).trimmingCharacters(in: .newlines)
         let trimmed = line.trimmingCharacters(in: .whitespaces)
 
-        // Shift+Enter = note bullet under current task
+        let indent = String(line.prefix(while: { $0 == " " }))
+
+        // Shift+Enter = note bullet under current task (one level deeper)
         if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+            let noteIndent = indent + "  "
             super.insertNewline(sender)
-            insertText("  ◦ ", replacementRange: selectedRange())
+            insertText(noteIndent + "◦ ", replacementRange: selectedRange())
             return
         }
 
         // Checkbox continuation
-        if trimmed.hasPrefix("- [ ] ") || trimmed.hasPrefix("- [x] ")
+        if trimmed.hasPrefix("- [ ]") || trimmed.hasPrefix("- [x] ")
             || trimmed.hasPrefix("- [X] ")
         {
-            let taskText = trimmed.count > 6
-                ? String(trimmed.dropFirst(6)).trimmingCharacters(in: .whitespaces) : ""
-            if taskText.isEmpty {
-                let prefixRange = (line as NSString).range(of: trimmed)
-                if prefixRange.location != NSNotFound {
-                    let abs = NSRange(
-                        location: lineRange.location + prefixRange.location,
-                        length: prefixRange.length)
-                    if shouldChangeText(in: abs, replacementString: "") {
-                        replaceCharacters(in: abs, with: "")
-                        didChangeText()
-                    }
-                }
-                return
-            }
             super.insertNewline(sender)
-            insertText("- [ ] ", replacementRange: selectedRange())
+            insertText(indent + "- [ ] ", replacementRange: selectedRange())
             return
         }
 
@@ -1375,10 +1527,8 @@ class MarkdownNSTextView: NSTextView {
                 }
                 return
             }
-            // Continue the note bullet with same indent
-            let indent = line.prefix(while: { $0 == " " || $0 == "\t" })
             super.insertNewline(sender)
-            insertText(String(indent) + "◦ ", replacementRange: selectedRange())
+            insertText(indent + "◦ ", replacementRange: selectedRange())
             return
         }
 
@@ -1400,7 +1550,7 @@ class MarkdownNSTextView: NSTextView {
             }
             let bulletPrefix = String(trimmed.prefix(2))
             super.insertNewline(sender)
-            insertText(bulletPrefix, replacementRange: selectedRange())
+            insertText(indent + bulletPrefix, replacementRange: selectedRange())
             return
         }
 
@@ -1610,78 +1760,16 @@ struct MarkdownEditorView: NSViewRepresentable {
 
 struct RichEditorView: View {
     @ObservedObject var store: NoteStore
-    @State private var newTaskText: String = ""
 
     var body: some View {
-        VStack(spacing: 0) {
-            MarkdownEditorView(
-                text: Binding(
-                    get: { store.text },
-                    set: { newValue in
-                        store.text = newValue
-                        store.scheduleSave()
-                    }
-                ))
-
-            Divider()
-
-            // Quick-add task bar
-            HStack(spacing: 10) {
-                Image(systemName: "plus.circle.fill")
-                    .font(.system(size: 18))
-                    .foregroundColor(.accentColor)
-                TextField("What needs to get done?", text: $newTaskText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 14))
-                    .onSubmit {
-                        let trimmed = newTaskText.trimmingCharacters(in: .whitespaces)
-                        guard !trimmed.isEmpty else { return }
-                        addTask(trimmed)
-                        newTaskText = ""
-                    }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.3))
-            )
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-        }
-    }
-
-    private func addTask(_ taskText: String) {
-        let lines = store.text.components(separatedBy: "\n")
-        let newTask = "- [ ] \(taskText)"
-
-        if let todayIdx = lines.firstIndex(where: {
-            $0.trimmingCharacters(in: .whitespaces) == "## Today"
-        }) {
-            var insertAt = todayIdx + 1
-            for i in (todayIdx + 1)..<lines.count {
-                let t = lines[i].trimmingCharacters(in: .whitespaces)
-                if t.hasPrefix("## ") { break }
-                insertAt = i + 1
-            }
-            while insertAt > todayIdx + 1
-                && lines[insertAt - 1].trimmingCharacters(in: .whitespaces).isEmpty
-            {
-                insertAt -= 1
-            }
-            var newLines = lines
-            newLines.insert(newTask, at: insertAt)
-            store.text = newLines.joined(separator: "\n")
-        } else if lines.allSatisfy({
-            $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }) {
-            store.text = "## Today\n\(newTask)"
-        } else {
-            store.text += "\n" + newTask
-        }
-
-        store.text = sortCheckboxBlocks(in: store.text)
-        store.scheduleSave()
+        MarkdownEditorView(
+            text: Binding(
+                get: { store.text },
+                set: { newValue in
+                    store.text = newValue
+                    store.scheduleSave()
+                }
+            ))
     }
 }
 
