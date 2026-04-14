@@ -67,7 +67,6 @@ swift build -c release --arch arm64 --arch x86_64
 
 ### Navigation
 
-- **Ctrl+Left** / **Ctrl+Right** to navigate between days
 - Click the date to open a calendar picker
 - Use the arrow buttons next to the date
 

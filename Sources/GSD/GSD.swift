@@ -1218,7 +1218,6 @@ class MarkdownStyler: NSObject, NSTextStorageDelegate {
 /// Custom NSTextView with checkbox clicks, Cmd+B/I, and Enter continuation.
 class MarkdownNSTextView: NSTextView {
     var onCheckboxToggle: ((NSRange) -> Void)?
-    var onNavigateDay: ((Int) -> Void)?  // -1 = previous, +1 = next
 
     // MARK: Checkbox click detection
 
@@ -1251,19 +1250,6 @@ class MarkdownNSTextView: NSTextView {
     // MARK: Keyboard shortcuts (Cmd+C/V/X/Z/A/B/I)
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // Ctrl+Left/Right: navigate between days
-        if event.modifierFlags.contains(.control),
-            let chars = event.charactersIgnoringModifiers
-        {
-            if chars == "\u{F702}" {  // left arrow
-                onNavigateDay?(-1)
-                return true
-            } else if chars == "\u{F703}" {  // right arrow
-                onNavigateDay?(1)
-                return true
-            }
-        }
-
         guard event.modifierFlags.contains(.command),
             let chars = event.charactersIgnoringModifiers
         else {
@@ -1669,7 +1655,6 @@ private func sortCheckboxBlocks(in text: String) -> String {
 /// SwiftUI wrapper for the full markdown editor.
 struct MarkdownEditorView: NSViewRepresentable {
     @Binding var text: String
-    var onNavigateDay: ((Int) -> Void)?
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -1725,11 +1710,6 @@ struct MarkdownEditorView: NSViewRepresentable {
             context.coordinator.toggleCheckbox(in: textView, lineRange: lineRange)
         }
 
-        // Day navigation (Ctrl+Left/Right)
-        textView.onNavigateDay = { [weak textView] direction in
-            guard textView != nil else { return }
-            onNavigateDay?(direction)
-        }
 
         // Initial content
         context.coordinator.isSyncing = true
@@ -1822,13 +1802,7 @@ struct RichEditorView: View {
                     store.scheduleSave()
                 }
             ),
-            onNavigateDay: { direction in
-                if direction < 0 {
-                    store.goToPreviousDay()
-                } else {
-                    store.goToNextDay()
-                }
-            })
+)
     }
 }
 
