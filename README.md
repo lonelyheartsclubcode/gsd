@@ -33,18 +33,50 @@ swift build -c release --arch arm64 --arch x86_64
 
 **Cmd+0** toggles the popover from anywhere.
 
+### Tasks
+
 - Type tasks with markdown checkboxes: `- [ ] task`
 - Click the checkbox prefix to toggle done/undone
-- Press Enter on a checkbox line to add another
-- **Cmd+B** / **Cmd+I** for bold/italic
+- Press **Enter** on a checkbox line to add another
+- Press **Backspace** on an empty task to delete the whole line in one press
 - Unchecked tasks sort to the top, checked sink to the bottom
 - Incomplete tasks automatically carry forward to the next day
+
+### Notes
+
+- Press **Shift+Enter** to add a note bullet (`◦`) under the current task
+- Press **Enter** on a note bullet to continue with another note
+- Press **Enter** on an empty note bullet to remove it
+
+### Indentation (up to 3 levels)
+
+- Press **Tab** to indent a task, note, or bullet as a subtask/sub-note
+- Press **Shift+Tab** to outdent
+- Press **Backspace** at the indent boundary to remove one indent level
+- Indented items render with proper visual indentation
+
+### Strikeout
+
+- Press **Cmd+D** to strike out a task (`- [-]`) without completing it
+- Press **Cmd+D** again to un-strikeout
+
+### Formatting
+
+- **Cmd+B** for bold, **Cmd+I** for italic
+- Headers, bold, italic, and strikethrough render inline as you type
+
+### Navigation
+
+- **Ctrl+Left** / **Ctrl+Right** to navigate between days
+- Click the date to open a calendar picker
+- Use the arrow buttons next to the date
 
 ## Features
 
 - **Menu bar app** — lives in your status bar, one hotkey away
+- **Contextual greeting** — time-of-day greeting in the header
 - **Plain markdown** — files stored at `~/.gsd/` as standard `.md`, open them in any editor
-- **Live formatting** — headers, bold, italic, strikethrough rendered inline as you type
+- **Live formatting** — headers, checkboxes, bold, italic, strikethrough rendered inline
 - **Multiple notebooks** — switch between separate note collections
 - **Calendar picker** — navigate to any date, dots show which days have notes
 - **Search** — full-text search across all your notes

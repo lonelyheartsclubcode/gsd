@@ -746,6 +746,10 @@ struct NoteView: View {
                     }
                     .buttonStyle(.plain)
 
+                    Text(greeting())
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+
                     Spacer()
 
                     if !store.isToday {
@@ -802,6 +806,33 @@ struct NoteView: View {
                 }
             )
         }
+    }
+
+    private func greeting() -> String {
+        let cal = Calendar.current
+        let date = store.currentDate
+
+        if cal.isDateInToday(date) {
+            let hour = cal.component(.hour, from: Date())
+            if hour < 12 {
+                return "What do you want to get done today?"
+            } else if hour < 17 {
+                return "What's next on the list?"
+            } else {
+                return "Anything left to knock out?"
+            }
+        }
+
+        if cal.isDateInYesterday(date) {
+            return "Here's what was on the plate."
+        }
+
+        let daysAgo = cal.dateComponents([.day], from: date, to: Date()).day ?? 999
+        if daysAgo > 0 {
+            return "Looking back at what was planned."
+        }
+
+        return "Planning ahead."
     }
 
     private func formattedDate() -> String {
@@ -1187,6 +1218,7 @@ class MarkdownStyler: NSObject, NSTextStorageDelegate {
 /// Custom NSTextView with checkbox clicks, Cmd+B/I, and Enter continuation.
 class MarkdownNSTextView: NSTextView {
     var onCheckboxToggle: ((NSRange) -> Void)?
+    var onNavigateDay: ((Int) -> Void)?  // -1 = previous, +1 = next
 
     // MARK: Checkbox click detection
 
@@ -1219,6 +1251,19 @@ class MarkdownNSTextView: NSTextView {
     // MARK: Keyboard shortcuts (Cmd+C/V/X/Z/A/B/I)
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Ctrl+Left/Right: navigate between days
+        if event.modifierFlags.contains(.control),
+            let chars = event.charactersIgnoringModifiers
+        {
+            if chars == "\u{F702}" {  // left arrow
+                onNavigateDay?(-1)
+                return true
+            } else if chars == "\u{F703}" {  // right arrow
+                onNavigateDay?(1)
+                return true
+            }
+        }
+
         guard event.modifierFlags.contains(.command),
             let chars = event.charactersIgnoringModifiers
         else {
@@ -1624,6 +1669,7 @@ private func sortCheckboxBlocks(in text: String) -> String {
 /// SwiftUI wrapper for the full markdown editor.
 struct MarkdownEditorView: NSViewRepresentable {
     @Binding var text: String
+    var onNavigateDay: ((Int) -> Void)?
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -1677,6 +1723,12 @@ struct MarkdownEditorView: NSViewRepresentable {
         // Checkbox toggle
         textView.onCheckboxToggle = { lineRange in
             context.coordinator.toggleCheckbox(in: textView, lineRange: lineRange)
+        }
+
+        // Day navigation (Ctrl+Left/Right)
+        textView.onNavigateDay = { [weak textView] direction in
+            guard textView != nil else { return }
+            onNavigateDay?(direction)
         }
 
         // Initial content
@@ -1769,7 +1821,14 @@ struct RichEditorView: View {
                     store.text = newValue
                     store.scheduleSave()
                 }
-            ))
+            ),
+            onNavigateDay: { direction in
+                if direction < 0 {
+                    store.goToPreviousDay()
+                } else {
+                    store.goToNextDay()
+                }
+            })
     }
 }
 
