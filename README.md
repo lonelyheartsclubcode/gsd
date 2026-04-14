@@ -44,9 +44,8 @@ swift build -c release --arch arm64 --arch x86_64
 
 ### Notes
 
-- Press **Shift+Enter** to add a note bullet (`◦`) under the current task
-- Press **Enter** on a note bullet to continue with another note
-- Press **Enter** on an empty note bullet to remove it
+- Press **Shift+Enter** for a plain newline (freeform markdown, headers, notes)
+- Type `◦ ` for a note bullet — Enter continues the bullet, empty bullet + Enter removes it
 
 ### Indentation (up to 3 levels)
 
@@ -55,10 +54,11 @@ swift build -c release --arch arm64 --arch x86_64
 - Press **Backspace** at the indent boundary to remove one indent level
 - Indented items render with proper visual indentation
 
-### Strikeout
+### Complete a task
 
-- Press **Cmd+D** to strike out a task (`- [-]`) without completing it
-- Press **Cmd+D** again to un-strikeout
+- Click the checkbox prefix to toggle done/undone
+- Press **Cmd+D** to toggle the current task done/undone from the keyboard
+- Checked tasks sink to the bottom, unchecked stay at the top
 
 ### Formatting
 
