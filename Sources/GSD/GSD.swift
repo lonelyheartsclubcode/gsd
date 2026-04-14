@@ -1018,6 +1018,25 @@ class MarkdownStyler: NSObject, NSTextStorageDelegate {
         else if trimmed == "---" || trimmed == "***" || trimmed == "___" {
             storage.addAttribute(.foregroundColor, value: Self.markerColor, range: range)
         }
+        // Struck-out task: - [-] task
+        else if trimmed.hasPrefix("- [-] ") {
+            let prefix = "- [-] "
+            if let pr = markerRange(in: line, prefix: prefix, baseLocation: range.location) {
+                storage.addAttribute(.foregroundColor, value: Self.markerColor, range: pr)
+                storage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 15, weight: .medium), range: pr)
+            }
+            let prefixLen = prefix.count
+            let leadingSpaces = line.count - line.drop(while: { $0 == " " }).count
+            let textStart = range.location + leadingSpaces + prefixLen
+            let textLen = range.location + range.length - textStart
+            if textLen > 0 {
+                let textRange = NSRange(location: textStart, length: textLen)
+                storage.addAttribute(.foregroundColor, value: Self.checkedColor, range: textRange)
+                storage.addAttribute(
+                    .strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: textRange)
+                storage.addAttribute(.strikethroughColor, value: Self.checkedColor, range: textRange)
+            }
+        }
         // Checked checkbox
         else if trimmed.hasPrefix("- [x] ") || trimmed.hasPrefix("- [X] ") {
             let prefix = trimmed.hasPrefix("- [x] ") ? "- [x] " : "- [X] "
@@ -1044,6 +1063,25 @@ class MarkdownStyler: NSObject, NSTextStorageDelegate {
                 storage.addAttribute(.foregroundColor, value: NSColor.systemOrange, range: pr)
                 storage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 15, weight: .medium), range: pr)
                 storage.addAttribute(.cursor, value: NSCursor.pointingHand, range: pr)
+            }
+        }
+        // Indented note lines (4 spaces + ◦ bullet)
+        else if trimmed.hasPrefix("◦ ") {
+            if let pr = markerRange(in: line, prefix: "◦ ", baseLocation: range.location) {
+                storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: pr)
+                storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 11, weight: .regular), range: pr)
+            }
+            let notePara = NSMutableParagraphStyle()
+            notePara.lineSpacing = 3
+            notePara.paragraphSpacing = 1
+            notePara.headIndent = 32
+            notePara.firstLineHeadIndent = 20
+            storage.addAttribute(.paragraphStyle, value: notePara, range: range)
+            storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: range)
+            storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 13, weight: .regular), range: range)
+            // Re-apply the bullet marker styling on top
+            if let pr = markerRange(in: line, prefix: "◦ ", baseLocation: range.location) {
+                storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 11, weight: .regular), range: pr)
             }
         }
         // Bullet
@@ -1190,6 +1228,35 @@ class MarkdownNSTextView: NSTextView {
             break
         }
 
+        // Cmd+D: strikeout task (toggle - [ ] / - [x] to - [-])
+        if chars == "d" {
+            let ns = self.string as NSString
+            let cursorLoc = selectedRange().location
+            guard cursorLoc <= ns.length else { return true }
+            let lineRange = ns.lineRange(for: NSRange(location: min(cursorLoc, max(ns.length - 1, 0)), length: 0))
+            let line = ns.substring(with: lineRange)
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            var newLine: String?
+            if trimmed.hasPrefix("- [-] ") {
+                // Un-strikeout → back to unchecked
+                newLine = line.replacingOccurrences(of: "- [-]", with: "- [ ]")
+            } else if trimmed.hasPrefix("- [ ] ") || trimmed.hasPrefix("- [x] ")
+                || trimmed.hasPrefix("- [X] ")
+            {
+                newLine = line.replacingOccurrences(of: "- [ ]", with: "- [-]")
+                    .replacingOccurrences(of: "- [x]", with: "- [-]")
+                    .replacingOccurrences(of: "- [X]", with: "- [-]")
+            }
+            if let replacement = newLine {
+                if shouldChangeText(in: lineRange, replacementString: replacement) {
+                    replaceCharacters(in: lineRange, with: replacement)
+                    didChangeText()
+                }
+            }
+            return true
+        }
+
         // Markdown formatting shortcuts
         let prefix: String
         let suffix: String
@@ -1245,7 +1312,7 @@ class MarkdownNSTextView: NSTextView {
         return true
     }
 
-    // MARK: Enter – continue checkboxes / bullets
+    // MARK: Enter – continue checkboxes / bullets; Shift+Enter for notes
 
     override func insertNewline(_ sender: Any?) {
         let ns = self.string as NSString
@@ -1258,6 +1325,13 @@ class MarkdownNSTextView: NSTextView {
         let lineRange = ns.lineRange(for: NSRange(location: min(cursor, max(ns.length - 1, 0)), length: 0))
         let line = ns.substring(with: lineRange).trimmingCharacters(in: .newlines)
         let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+        // Shift+Enter = note bullet under current task
+        if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+            super.insertNewline(sender)
+            insertText("  ◦ ", replacementRange: selectedRange())
+            return
+        }
 
         // Checkbox continuation
         if trimmed.hasPrefix("- [ ] ") || trimmed.hasPrefix("- [x] ")
@@ -1280,6 +1354,31 @@ class MarkdownNSTextView: NSTextView {
             }
             super.insertNewline(sender)
             insertText("- [ ] ", replacementRange: selectedRange())
+            return
+        }
+
+        // Note bullet continuation (◦)
+        if trimmed.hasPrefix("◦ ") {
+            let content = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            if content.isEmpty {
+                // Empty note bullet — remove the whole line content
+                let fullLine = line.trimmingCharacters(in: .newlines)
+                let prefixRange = (line as NSString).range(of: fullLine)
+                if prefixRange.location != NSNotFound {
+                    let abs = NSRange(
+                        location: lineRange.location + prefixRange.location,
+                        length: prefixRange.length)
+                    if shouldChangeText(in: abs, replacementString: "") {
+                        replaceCharacters(in: abs, with: "")
+                        didChangeText()
+                    }
+                }
+                return
+            }
+            // Continue the note bullet with same indent
+            let indent = line.prefix(while: { $0 == " " || $0 == "\t" })
+            super.insertNewline(sender)
+            insertText(String(indent) + "◦ ", replacementRange: selectedRange())
             return
         }
 
