@@ -1531,8 +1531,49 @@ class MarkdownNSTextView: NSTextView {
 
         let indent = String(line.prefix(while: { $0 == " " }))
 
-        // Shift+Enter = plain newline (freeform markdown)
+        // Shift+Enter: continue bullet if on a bullet line, otherwise plain newline
         if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+            if trimmed.hasPrefix("• ") {
+                let content = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                if content.isEmpty {
+                    // Empty bullet — remove it, plain newline
+                    let fullLine = line.trimmingCharacters(in: .newlines)
+                    let prefixRange = (line as NSString).range(of: fullLine)
+                    if prefixRange.location != NSNotFound {
+                        let abs = NSRange(
+                            location: lineRange.location + prefixRange.location,
+                            length: prefixRange.length)
+                        if shouldChangeText(in: abs, replacementString: "") {
+                            replaceCharacters(in: abs, with: "")
+                            didChangeText()
+                        }
+                    }
+                    return
+                }
+                super.insertNewline(sender)
+                insertText(indent + "• ", replacementRange: selectedRange())
+                return
+            } else if trimmed.hasPrefix("◦ ") {
+                let content = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                if content.isEmpty {
+                    let fullLine = line.trimmingCharacters(in: .newlines)
+                    let prefixRange = (line as NSString).range(of: fullLine)
+                    if prefixRange.location != NSNotFound {
+                        let abs = NSRange(
+                            location: lineRange.location + prefixRange.location,
+                            length: prefixRange.length)
+                        if shouldChangeText(in: abs, replacementString: "") {
+                            replaceCharacters(in: abs, with: "")
+                            didChangeText()
+                        }
+                    }
+                    return
+                }
+                super.insertNewline(sender)
+                insertText(indent + "◦ ", replacementRange: selectedRange())
+                return
+            }
+            // Not on a bullet line — plain newline
             super.insertNewline(sender)
             return
         }
@@ -1612,7 +1653,9 @@ class MarkdownNSTextView: NSTextView {
             return
         }
 
+        // Default: always create a new task
         super.insertNewline(sender)
+        insertText("- [ ] ", replacementRange: selectedRange())
     }
 }
 
@@ -1803,16 +1846,72 @@ struct MarkdownEditorView: NSViewRepresentable {
             parent.text = tv.string
         }
 
+        /// Maps task text to its original line index before it was completed,
+        /// so uncompleting restores it to its original position.
+        var completedTaskOrigins: [String: Int] = [:]
+
         func toggleCheckbox(in textView: MarkdownNSTextView, lineRange: NSRange) {
             let string = textView.string as NSString
             let line = string.substring(with: lineRange)
 
+            var lines = textView.string.components(separatedBy: "\n")
+            let lineIdx = lines.firstIndex(where: { lineStr in
+                let r = (textView.string as NSString).range(of: lineStr)
+                return r.location == lineRange.location
+            }) ?? 0
+
             var newLine: String
-            if line.contains("- [ ]") {
+            let isCompleting = line.contains("- [ ]")
+
+            if isCompleting {
                 newLine = line.replacingOccurrences(of: "- [ ]", with: "- [x]")
+                // Remember where this task was
+                let taskKey = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "- [ ] ", with: "")
+                completedTaskOrigins[taskKey] = lineIdx
             } else {
                 newLine = line.replacingOccurrences(of: "- [x]", with: "- [ ]")
                     .replacingOccurrences(of: "- [X]", with: "- [ ]")
+
+                // Restore to original position if we know it
+                let taskKey = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "- [x] ", with: "")
+                    .replacingOccurrences(of: "- [X] ", with: "")
+                if let originalIdx = completedTaskOrigins.removeValue(forKey: taskKey) {
+                    // Remove from current position, re-insert at original
+                    lines[lineIdx] = newLine
+                    let removed = lines.remove(at: lineIdx)
+
+                    // Collect any note bullets attached to this task
+                    var notes: [String] = []
+                    while lineIdx < lines.count {
+                        let nt = lines[lineIdx].trimmingCharacters(in: .whitespaces)
+                        if nt.hasPrefix("◦") || (lines[lineIdx].hasPrefix("  ") && !nt.hasPrefix("- [")) {
+                            notes.append(lines.remove(at: lineIdx))
+                        } else {
+                            break
+                        }
+                    }
+
+                    let insertAt = min(originalIdx, lines.count)
+                    lines.insert(removed, at: insertAt)
+                    for (j, note) in notes.enumerated() {
+                        lines.insert(note, at: min(insertAt + 1 + j, lines.count))
+                    }
+
+                    let text = lines.joined(separator: "\n")
+                    textView.undoManager?.beginUndoGrouping()
+                    let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+                    isSyncing = true
+                    if textView.shouldChangeText(in: fullRange, replacementString: text) {
+                        textView.replaceCharacters(in: fullRange, with: text)
+                        textView.didChangeText()
+                    }
+                    parent.text = textView.string
+                    isSyncing = false
+                    textView.undoManager?.endUndoGrouping()
+                    return
+                }
             }
 
             // Build toggled text, then sort checkbox blocks
@@ -1822,7 +1921,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             }
             text = sortCheckboxBlocks(in: text)
 
-            // Apply as single change
+            // Apply as single undoable change (toggle + sort together)
+            textView.undoManager?.beginUndoGrouping()
             let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
             isSyncing = true
             if textView.shouldChangeText(in: fullRange, replacementString: text) {
@@ -1831,6 +1931,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             }
             parent.text = textView.string
             isSyncing = false
+            textView.undoManager?.endUndoGrouping()
         }
     }
 }
